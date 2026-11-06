@@ -11,7 +11,7 @@ const httpAgent = new (require('http').Agent)({ keepAlive: true });
 const httpsAgent = new (require('https').Agent)({ keepAlive: true });
 
 const axiosInstance = axios.create({
-  timeout: 5000, // Таймаут от 5 секунди за бърз отговор
+  timeout: 6000,
   httpAgent,
   httpsAgent,
   headers: {
@@ -37,10 +37,10 @@ function addMinutesToTime(timeStr, minutesToAdd) {
 
 // Начален маршрут за проверка
 app.get('/', (req, res) => {
-  res.send('BDZ Fast Proxy с маршрути и закъснения работи успешно!');
+  res.send('BDZ Fast Proxy с маршрути, закъснения и търсене работи успешно!');
 });
 
-// Основен API маршрут
+// 1. Съществуващ маршрут за табло на станция (пристигащи / заминаващи с маршрути и закъснения)
 app.get('/api/bdz/:station/:type', async (req, res) => {
   const { station, type } = req.params;
   const targetUrl = `https://live.bdz.bg/bg/${station}/${type}`;
@@ -48,7 +48,6 @@ app.get('/api/bdz/:station/:type', async (req, res) => {
   try {
     const response = await axiosInstance.get(targetUrl);
     const $ = cheerio.load(response.data);
-
     const items = $('.timetableItem').toArray();
 
     // Паралелна обработка на всички влакове едновременно с Promise.all за максимална бързина
@@ -86,7 +85,7 @@ app.get('/api/bdz/:station/:type', async (req, res) => {
             }
           });
         } catch (e) {
-          // Ако отделна заявка за маршрут се забави или върне грешка, продължаваме напред без да блокираме
+          // Ако отделна заявка за маршрут се забави или върне грешка, продължаваме напред
         }
       }
 
@@ -113,11 +112,64 @@ app.get('/api/bdz/:station/:type', async (req, res) => {
 
   } catch (error) {
     res.status(500).json({
-      error: 'Грешка при бързото извличане на данните',
+      error: 'Грешка при извличане на данните',
+      details: error.message
+    });
+  }
+});
+
+// 2. Нов маршрут: Търсене на връзки между две гари
+// Пример: /api/bdz-search?from=vraca&to=sofia&date=2026-11-06
+app.get('/api/bdz-search', async (req, res) => {
+  const { from, to, date } = req.query;
+
+  if (!from || !to) {
+    return res.status(400).json({ error: 'Моля, посочете начална (from) и крайна (to) гара.' });
+  }
+
+  const searchUrl = `https://razpisanie.bdz.bg/bg/${from}/${to}`;
+
+  try {
+    const response = await axiosInstance.get(searchUrl, {
+      params: { date: date || '' }
+    });
+
+    const $ = cheerio.load(response.data);
+    const connections = [];
+
+    $('.schedule-row, .timetableItem, tr').each((_, el) => {
+      const trainName = $(el).find('.train-type, .col-6').first().text().trim();
+      const depTime = $(el).find('.departure-time, .col-3').first().text().trim();
+      const arrTime = $(el).find('.arrival-time, .col-3').last().text().trim();
+      const duration = $(el).find('.duration').text().trim();
+
+      if (depTime && arrTime) {
+        connections.push({
+          train: trainName || 'Влак',
+          departureStation: from,
+          departureTime: depTime,
+          arrivalStation: to,
+          arrivalTime: arrTime,
+          duration: duration || 'Н/Д'
+        });
+      }
+    });
+
+    res.json({
+      from,
+      to,
+      date: date || 'Днес',
+      count: connections.length,
+      results: connections
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      error: 'Грешка при търсене на маршрута',
       details: error.message
     });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Proxy работи на порт ${PORT}`));
+app.listen(PORT, () => console.log(`Proxy сървърът работи на порт ${PORT}`));
